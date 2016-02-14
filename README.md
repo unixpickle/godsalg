@@ -1,3 +1,3 @@
 # Abstract
 
-I want to see if I can use identification trees to solve the Rubik's cube optimally.
+I am going to try to come up with God's algorithm for the Rubik's cube.

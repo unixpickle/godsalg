@@ -1,164 +1,78 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"strconv"
 
 	"github.com/unixpickle/gocube"
+	"github.com/unixpickle/godsalg/scrambler"
+	"github.com/unixpickle/godsalg/vectorize"
+	"github.com/unixpickle/weakai/svm"
 )
 
-const MaxFullSearchDepth = 5
-const MaxCountPerDepth = 10000
-
-type SearchNode struct {
-	cube  gocube.CubieCube
-	depth int
-}
+const maxDepth = 7
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "Usage: godsalg <output.csv>")
-		os.Exit(1)
+	fmt.Println("Generating cubes...")
+	m := moveToCube(maxDepth, 2000)
+
+	fmt.Println("Formulating SVM problem...")
+
+	problem := &svm.Problem{
+		Positives: make([]svm.Sample, 0),
+		Negatives: make([]svm.Sample, 0),
+		Kernel:    svm.LinearKernel,
 	}
 
-	nodes := []SearchNode{SearchNode{gocube.SolvedCubieCube(), 0}}
-	visited := map[gocube.CubieCube]int{}
-	for len(nodes) > 0 {
-		node := nodes[0]
-		nodes = nodes[1:]
-		if _, ok := visited[node.cube]; !ok {
-			visited[node.cube] = node.depth
-			if node.depth == MaxFullSearchDepth {
-				continue
-			}
-			for moveIdx := 0; moveIdx < 18; moveIdx++ {
-				cube := node.cube
-				cube.Move(gocube.Move(moveIdx))
-				nodes = append(nodes, SearchNode{cube, node.depth + 1})
-			}
-		}
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString("*Move Count")
-	for i := 0; i < 8; i++ {
-		buf.WriteRune(',')
-		buf.WriteString("CornerPiece")
-		buf.WriteString(strconv.Itoa(i))
-		buf.WriteRune(',')
-		buf.WriteString("CornerOrientation")
-		buf.WriteString(strconv.Itoa(i))
-		buf.WriteRune(',')
-		buf.WriteString("Corner")
-		buf.WriteString(strconv.Itoa(i))
-	}
-	for i := 0; i < 12; i++ {
-		buf.WriteRune(',')
-		buf.WriteString("EdgePiece")
-		buf.WriteString(strconv.Itoa(i))
-		buf.WriteRune(',')
-		buf.WriteString("EdgeOrientation")
-		buf.WriteString(strconv.Itoa(i))
-		buf.WriteRune(',')
-		buf.WriteString("Edge")
-		buf.WriteString(strconv.Itoa(i))
-	}
-	for i := 0; i < 12; i++ {
-		for j := 0; j < 8; j++ {
-			buf.WriteString(",EdgeCorner")
-			buf.WriteString(strconv.Itoa(i))
-			buf.WriteRune('-')
-			buf.WriteString(strconv.Itoa(j))
-		}
-	}
-	for i := 0; i < 12; i++ {
-		for j := 0; j < 8; j++ {
-			buf.WriteString(",EOCO")
-			buf.WriteString(strconv.Itoa(i))
-			buf.WriteRune('-')
-			buf.WriteString(strconv.Itoa(j))
-		}
-	}
-
-	numPerDepth := map[int]int{}
-	for cube, depth := range visited {
-		if numPerDepth[depth] == MaxCountPerDepth {
-			continue
-		}
-		numPerDepth[depth]++
-		buf.WriteRune('\n')
-		csvRowForCube(&buf, depth, cube)
-	}
-
-	if err := ioutil.WriteFile(os.Args[1], buf.Bytes(), 0755); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func csvRowForCube(buf *bytes.Buffer, depth int, c gocube.CubieCube) {
-	buf.WriteString(strconv.Itoa(depth))
-	for i := 0; i < 8; i++ {
-		buf.WriteString(",_")
-		buf.WriteString(strconv.Itoa(c.Corners[i].Piece))
-		buf.WriteRune(',')
-		buf.WriteString(orientationAxis(c.Corners[i].Orientation))
-		buf.WriteString(",")
-		buf.WriteString(strconv.Itoa(c.Corners[i].Piece))
-		buf.WriteRune('-')
-		buf.WriteString(orientationAxis(c.Corners[i].Orientation))
-	}
-	for i := 0; i < 12; i++ {
-		buf.WriteString(",_")
-		buf.WriteString(strconv.Itoa(c.Edges[i].Piece))
-		buf.WriteRune(',')
-		if c.Edges[i].Flip {
-			buf.WriteString("true")
-		} else {
-			buf.WriteString("false")
-		}
-		buf.WriteString(",")
-		buf.WriteString(strconv.Itoa(c.Edges[i].Piece))
-		buf.WriteRune('-')
-		if c.Edges[i].Flip {
-			buf.WriteString("true")
-		} else {
-			buf.WriteString("false")
-		}
-	}
-	for i := 0; i < 12; i++ {
-		for j := 0; j < 8; j++ {
-			buf.WriteRune(',')
-			buf.WriteString(strconv.Itoa(c.Edges[i].Piece))
-			buf.WriteRune('-')
-			buf.WriteString(strconv.Itoa(c.Corners[j].Piece))
-		}
-	}
-	for i := 0; i < 12; i++ {
-		for j := 0; j < 8; j++ {
-			buf.WriteRune(',')
-			if c.Edges[i].Flip {
-				buf.WriteString("true")
+	for depth, cubes := range m {
+		for _, cube := range cubes {
+			vec := svm.Sample(vectorize.SlotScores(cube))
+			if depth == maxDepth {
+				problem.Positives = append(problem.Positives, vec)
 			} else {
-				buf.WriteString("false")
+				problem.Negatives = append(problem.Negatives, vec)
 			}
-			buf.WriteRune('-')
-			buf.WriteString(orientationAxis(c.Corners[j].Orientation))
 		}
 	}
+
+	fmt.Println("Solving...")
+	solver := svm.GradientDescentSolver{
+		Steps:    10000,
+		StepSize: 0.01,
+		Tradeoff: 0.001,
+	}
+	solution := solver.Solve(problem)
+
+	rateClassifier(m, solution)
 }
 
-func orientationAxis(orientation int) string {
-	switch orientation {
-	case 0:
-		return "x"
-	case 1:
-		return "y"
-	case 2:
-		return "z"
+func moveToCube(maxMoves, width int) map[int][]gocube.CubieCube {
+	res := map[int][]gocube.CubieCube{}
+	for i := 0; i <= maxMoves; i++ {
+		res[i] = []gocube.CubieCube{}
 	}
-	panic("unknown orientation")
+
+	cubes := scrambler.Sparse(maxMoves, width)
+	for cube, depth := range cubes {
+		res[depth] = append(res[depth], cube)
+	}
+
+	return res
+}
+
+func rateClassifier(cubes map[int][]gocube.CubieCube, classifier svm.Classifier) {
+	for depth := 0; depth <= maxDepth; depth++ {
+		depthCubes := cubes[depth]
+		var numRight int
+		var numWrong int
+		for _, cube := range depthCubes {
+			class := classifier.Classify(vectorize.SlotScores(cube))
+			if class == (depth == maxDepth) {
+				numRight++
+			} else {
+				numWrong++
+			}
+		}
+		fmt.Println("Depth", depth, "got", numRight, "/", (numRight + numWrong), "=",
+			100*float64(numRight)/float64(numRight+numWrong), "%")
+	}
 }
