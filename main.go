@@ -2,77 +2,147 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"os"
+	"os/signal"
 
 	"github.com/unixpickle/gocube"
-	"github.com/unixpickle/godsalg/scrambler"
-	"github.com/unixpickle/godsalg/vectorize"
-	"github.com/unixpickle/weakai/svm"
+	"github.com/unixpickle/num-analysis/linalg"
+	"github.com/unixpickle/weakai/rnn"
+	"github.com/unixpickle/weakai/rnn/lstm"
+	"github.com/unixpickle/weakai/rnn/softmax"
 )
 
-const maxDepth = 7
+const (
+	HiddenSize1 = 500
+	HiddenSize2 = 500
+	StepSize    = 0.00001
+	BatchSize   = 100
 
-func main() {
-	fmt.Println("Generating cubes...")
-	m := moveToCube(maxDepth, 2000)
+	MinMoves = 9
+	MaxMoves = 16
 
-	fmt.Println("Formulating SVM problem...")
+	TrainingCount   = 40000
+	ValidationCount = 500
+)
 
-	problem := &svm.Problem{
-		Positives: make([]svm.Sample, 0),
-		Negatives: make([]svm.Sample, 0),
-		Kernel:    svm.LinearKernel,
-	}
-
-	for depth, cubes := range m {
-		for _, cube := range cubes {
-			vec := svm.Sample(vectorize.SlotScores(cube))
-			if depth == maxDepth {
-				problem.Positives = append(problem.Positives, vec)
-			} else {
-				problem.Negatives = append(problem.Negatives, vec)
-			}
-		}
-	}
-
-	fmt.Println("Solving...")
-	solver := svm.GradientDescentSolver{
-		Steps:    10000,
-		StepSize: 0.01,
-		Tradeoff: 0.001,
-	}
-	solution := solver.Solve(problem)
-
-	rateClassifier(m, solution)
+type DataPoint struct {
+	Cube  *gocube.CubieCube
+	Moves int
 }
 
-func moveToCube(maxMoves, width int) map[int][]gocube.CubieCube {
-	res := map[int][]gocube.CubieCube{}
-	for i := 0; i <= maxMoves; i++ {
-		res[i] = []gocube.CubieCube{}
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: godsalg <output>")
+		os.Exit(1)
 	}
 
-	cubes := scrambler.Sparse(maxMoves, width)
-	for cube, depth := range cubes {
-		res[depth] = append(res[depth], cube)
+	net := rnn.DeepRNN{
+		lstm.NewNet(rnn.ReLU{}, 6*6*8, 0, HiddenSize1),
+		lstm.NewNet(rnn.ReLU{}, HiddenSize1, 0, HiddenSize2),
+		lstm.NewNet(rnn.ReLU{}, HiddenSize2, 0, 21),
+		softmax.NewSoftmax(21),
+	}
+	net.Randomize()
+
+	trainingData := GenerateData(TrainingCount)
+
+	inVecs, outVecs := DataToVectors(trainingData)
+	trainer := rnn.RMSProp{
+		SGD: rnn.SGD{
+			CostFunc:  rnn.MeanSquaredCost{},
+			InSeqs:    inVecs,
+			OutSeqs:   outVecs,
+			StepSize:  StepSize,
+			BatchSize: BatchSize,
+			Epochs:    1,
+		},
 	}
 
+	killChan := make(chan struct{})
+
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		<-c
+		signal.Stop(c)
+		fmt.Println("\nCaught interrupt. Ctrl+C again to terminate.")
+		close(killChan)
+	}()
+
+	testingData := GenerateData(ValidationCount)
+TrainLoop:
+	for {
+		select {
+		case <-killChan:
+			break TrainLoop
+		default:
+		}
+		log.Printf("Score: training=%.02f%%, cross=%.02f%%", ClassifierScore(net, trainingData),
+			ClassifierScore(net, testingData))
+		select {
+		case <-killChan:
+			break TrainLoop
+		default:
+		}
+		trainer.Train(net)
+	}
+
+	file := os.Args[1]
+	data, _ := net.Serialize()
+	if err := ioutil.WriteFile(file, data, 0755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func GenerateData(count int) []DataPoint {
+	var res []DataPoint
+	for i := 0; i < count; i++ {
+		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
+		res = append(res, DataPoint{
+			Cube:  RandomScramble(moves),
+			Moves: moves,
+		})
+	}
 	return res
 }
 
-func rateClassifier(cubes map[int][]gocube.CubieCube, classifier svm.Classifier) {
-	for depth := 0; depth <= maxDepth; depth++ {
-		depthCubes := cubes[depth]
-		var numRight int
-		var numWrong int
-		for _, cube := range depthCubes {
-			class := classifier.Classify(vectorize.SlotScores(cube))
-			if class == (depth == maxDepth) {
-				numRight++
-			} else {
-				numWrong++
-			}
-		}
-		fmt.Println("Depth", depth, "got", numRight, "/", (numRight + numWrong), "=",
-			100*float64(numRight)/float64(numRight+numWrong), "%")
+func DataToVectors(d []DataPoint) (v1, v2 [][]linalg.Vector) {
+	for _, x := range d {
+		v1 = append(v1, []linalg.Vector{CubeVector(x.Cube)})
+		vec := make(linalg.Vector, 21)
+		vec[x.Moves] = 1
+		v2 = append(v2, []linalg.Vector{vec})
 	}
+	return
+}
+
+func ClassifierScore(r rnn.RNN, data []DataPoint) float64 {
+	var numRight int
+	var numTotal int
+	for _, test := range data {
+		guess := ClassifyCube(r, test.Cube)
+		if guess == test.Moves {
+			numRight++
+		}
+		numTotal++
+	}
+	return 100 * float64(numRight) / float64(numTotal)
+}
+
+func ClassifyCube(r rnn.RNN, c *gocube.CubieCube) int {
+	output := r.StepTime(CubeVector(c))
+	r.Reset()
+	var maxIdx int
+	var maxVal float64
+	for i, x := range output {
+		if x > maxVal {
+			maxIdx = i
+			maxVal = x
+		}
+	}
+	return maxIdx
 }
