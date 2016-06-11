@@ -7,26 +7,27 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"sync/atomic"
 
+	"github.com/unixpickle/autofunc"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/num-analysis/linalg"
-	"github.com/unixpickle/weakai/rnn"
-	"github.com/unixpickle/weakai/rnn/lstm"
-	"github.com/unixpickle/weakai/rnn/softmax"
+	"github.com/unixpickle/weakai/neuralnet"
 )
 
 const (
-	HiddenSize1 = 500
-	HiddenSize2 = 500
-	StepSize    = 0.00001
-	BatchSize   = 100
+	StepSize     = 1e-6
+	BigBatchSize = 4000
+	BatchSize    = 120
 
-	MinMoves = 9
-	MaxMoves = 16
+	ValidationCount = 200
 
-	TrainingCount   = 40000
-	ValidationCount = 500
+	OutputCount = 21
+	MinMoves    = 9
+	MaxMoves    = 16
 )
+
+var HiddenSizes = []int{3000, 2000}
 
 type DataPoint struct {
 	Cube  *gocube.CubieCube
@@ -39,55 +40,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	net := rnn.DeepRNN{
-		lstm.NewNet(rnn.ReLU{}, 6*6*8, 0, HiddenSize1),
-		lstm.NewNet(rnn.ReLU{}, HiddenSize1, 0, HiddenSize2),
-		lstm.NewNet(rnn.ReLU{}, HiddenSize2, 0, 21),
-		softmax.NewSoftmax(21),
+	net := CreateNetwork()
+	batcher := &neuralnet.BatchRGradienter{
+		Learner:      net.BatchLearner(),
+		CostFunc:     neuralnet.MeanSquaredCost{},
+		MaxBatchSize: 15,
 	}
-	net.Randomize()
+	rms := &neuralnet.RMSProp{Gradienter: batcher}
 
-	trainingData := GenerateData(TrainingCount)
+	signal := KillSignal()
 
-	inVecs, outVecs := DataToVectors(trainingData)
-	trainer := rnn.RMSProp{
-		SGD: rnn.SGD{
-			CostFunc:  rnn.MeanSquaredCost{},
-			InSeqs:    inVecs,
-			OutSeqs:   outVecs,
-			StepSize:  StepSize,
-			BatchSize: BatchSize,
-			Epochs:    1,
-		},
-	}
-
-	killChan := make(chan struct{})
-
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		<-c
-		signal.Stop(c)
-		fmt.Println("\nCaught interrupt. Ctrl+C again to terminate.")
-		close(killChan)
-	}()
-
-	testingData := GenerateData(ValidationCount)
-TrainLoop:
-	for {
-		select {
-		case <-killChan:
-			break TrainLoop
-		default:
-		}
-		log.Printf("Score: training=%.02f%%, cross=%.02f%%", ClassifierScore(net, trainingData),
-			ClassifierScore(net, testingData))
-		select {
-		case <-killChan:
-			break TrainLoop
-		default:
-		}
-		trainer.Train(net)
+	trainingData := GenerateData(BigBatchSize)
+	for atomic.LoadUint32(signal) == 0 {
+		samples := DataToVectors(trainingData)
+		neuralnet.SGD(rms, samples, StepSize, 1, BigBatchSize)
+		trainingData = GenerateData(BigBatchSize)
+		t := trainingData[:ValidationCount]
+		log.Printf("Training success: %.02f%%", ClassifierScore(net, t))
 	}
 
 	file := os.Args[1]
@@ -96,6 +65,41 @@ TrainLoop:
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func CreateNetwork() neuralnet.Network {
+	net := neuralnet.Network{}
+	for i, x := range HiddenSizes {
+		inputSize := 6 * 6 * 8
+		if i > 0 {
+			inputSize = HiddenSizes[i-1]
+		}
+		layer := &neuralnet.DenseLayer{
+			InputCount:  inputSize,
+			OutputCount: x,
+		}
+		net = append(net, layer, neuralnet.Sigmoid{})
+	}
+	layer := &neuralnet.DenseLayer{
+		InputCount:  HiddenSizes[len(HiddenSizes)-1],
+		OutputCount: OutputCount,
+	}
+	net = append(net, layer, &neuralnet.SoftmaxLayer{})
+	net.Randomize()
+	return net
+}
+
+func KillSignal() *uint32 {
+	var killFlag uint32
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		<-c
+		signal.Stop(c)
+		fmt.Println("\nCaught interrupt. Ctrl+C again to terminate.")
+		atomic.StoreUint32(&killFlag, 1)
+	}()
+	return &killFlag
 }
 
 func GenerateData(count int) []DataPoint {
@@ -110,17 +114,21 @@ func GenerateData(count int) []DataPoint {
 	return res
 }
 
-func DataToVectors(d []DataPoint) (v1, v2 [][]linalg.Vector) {
-	for _, x := range d {
-		v1 = append(v1, []linalg.Vector{CubeVector(x.Cube)})
-		vec := make(linalg.Vector, 21)
-		vec[x.Moves] = 1
-		v2 = append(v2, []linalg.Vector{vec})
+func DataToVectors(d []DataPoint) *neuralnet.SampleSet {
+	samples := &neuralnet.SampleSet{
+		Inputs:  make([]linalg.Vector, 0, len(d)),
+		Outputs: make([]linalg.Vector, 0, len(d)),
 	}
-	return
+	for _, x := range d {
+		samples.Inputs = append(samples.Inputs, CubeVector(x.Cube))
+		vec := make(linalg.Vector, OutputCount)
+		vec[x.Moves] = 1
+		samples.Outputs = append(samples.Outputs, vec)
+	}
+	return samples
 }
 
-func ClassifierScore(r rnn.RNN, data []DataPoint) float64 {
+func ClassifierScore(r neuralnet.Network, data []DataPoint) float64 {
 	var numRight int
 	var numTotal int
 	for _, test := range data {
@@ -133,9 +141,8 @@ func ClassifierScore(r rnn.RNN, data []DataPoint) float64 {
 	return 100 * float64(numRight) / float64(numTotal)
 }
 
-func ClassifyCube(r rnn.RNN, c *gocube.CubieCube) int {
-	output := r.StepTime(CubeVector(c))
-	r.Reset()
+func ClassifyCube(r neuralnet.Network, c *gocube.CubieCube) int {
+	output := r.Apply(&autofunc.Variable{CubeVector(c)}).Output()
 	var maxIdx int
 	var maxVal float64
 	for i, x := range output {
