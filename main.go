@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	StepSize     = 1e-6
+	StepSize     = 1e-5
 	BigBatchSize = 4000
 	BatchSize    = 120
 
@@ -43,7 +43,7 @@ func main() {
 	net := CreateNetwork()
 	batcher := &neuralnet.BatchRGradienter{
 		Learner:      net.BatchLearner(),
-		CostFunc:     neuralnet.MeanSquaredCost{},
+		CostFunc:     neuralnet.DotCost{},
 		MaxBatchSize: 15,
 	}
 	rms := &neuralnet.RMSProp{Gradienter: batcher}
@@ -51,12 +51,19 @@ func main() {
 	signal := KillSignal()
 
 	trainingData := GenerateData(BigBatchSize)
+	var rollingAverage float64
 	for atomic.LoadUint32(signal) == 0 {
 		samples := DataToVectors(trainingData)
 		neuralnet.SGD(rms, samples, StepSize, 1, BigBatchSize)
 		trainingData = GenerateData(BigBatchSize)
 		t := trainingData[:ValidationCount]
-		log.Printf("Training success: %.02f%%", ClassifierScore(net, t))
+		score := ClassifierScore(net, t)
+		if rollingAverage == 0 {
+			rollingAverage = score
+		} else {
+			rollingAverage = 0.9*rollingAverage + 0.1*score
+		}
+		log.Printf("Success=%.02f%% rolling=%0.2f%%", score, rollingAverage)
 	}
 
 	file := os.Args[1]
@@ -84,7 +91,7 @@ func CreateNetwork() neuralnet.Network {
 		InputCount:  HiddenSizes[len(HiddenSizes)-1],
 		OutputCount: OutputCount,
 	}
-	net = append(net, layer, &neuralnet.SoftmaxLayer{})
+	net = append(net, layer, &neuralnet.LogSoftmaxLayer{})
 	net.Randomize()
 	return net
 }
@@ -114,18 +121,16 @@ func GenerateData(count int) []DataPoint {
 	return res
 }
 
-func DataToVectors(d []DataPoint) *neuralnet.SampleSet {
-	samples := &neuralnet.SampleSet{
-		Inputs:  make([]linalg.Vector, 0, len(d)),
-		Outputs: make([]linalg.Vector, 0, len(d)),
-	}
+func DataToVectors(d []DataPoint) neuralnet.SampleSet {
+	inputs := make([]linalg.Vector, 0, len(d))
+	outputs := make([]linalg.Vector, 0, len(d))
 	for _, x := range d {
-		samples.Inputs = append(samples.Inputs, CubeVector(x.Cube))
+		inputs = append(inputs, CubeVector(x.Cube))
 		vec := make(linalg.Vector, OutputCount)
 		vec[x.Moves] = 1
-		samples.Outputs = append(samples.Outputs, vec)
+		outputs = append(outputs, vec)
 	}
-	return samples
+	return neuralnet.VectorSampleSet(inputs, outputs)
 }
 
 func ClassifierScore(r neuralnet.Network, data []DataPoint) float64 {
@@ -146,7 +151,7 @@ func ClassifyCube(r neuralnet.Network, c *gocube.CubieCube) int {
 	var maxIdx int
 	var maxVal float64
 	for i, x := range output {
-		if x > maxVal {
+		if x > maxVal || i == 0 {
 			maxIdx = i
 			maxVal = x
 		}
