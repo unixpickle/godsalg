@@ -2,37 +2,22 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
-	"math/rand"
+	"math"
 	"os"
-	"os/signal"
-	"sync/atomic"
 
-	"github.com/unixpickle/autofunc"
-	"github.com/unixpickle/gocube"
-	"github.com/unixpickle/num-analysis/linalg"
-	"github.com/unixpickle/weakai/neuralnet"
+	"github.com/unixpickle/weakai/idtrees"
 )
 
 const (
-	StepSize     = 1e-5
-	BigBatchSize = 4000
-	BatchSize    = 120
+	NumSamples = 300000
+	NumTrees   = 5000
+	SubSamples = 2000
+	SubAttrs   = 15
 
-	ValidationCount = 200
-
-	OutputCount = 21
-	MinMoves    = 9
-	MaxMoves    = 16
+	MinMoves = 5
+	MaxMoves = 18
 )
-
-var HiddenSizes = []int{3000, 2000}
-
-type DataPoint struct {
-	Cube  *gocube.CubieCube
-	Moves int
-}
 
 func main() {
 	if len(os.Args) != 2 {
@@ -40,121 +25,71 @@ func main() {
 		os.Exit(1)
 	}
 
-	net := CreateNetwork()
-	batcher := &neuralnet.BatchRGradienter{
-		Learner:      net.BatchLearner(),
-		CostFunc:     neuralnet.DotCost{},
-		MaxBatchSize: 15,
+	var features []idtrees.Attr
+	for i := 0; i < 54+12+8; i++ {
+		features = append(features, i)
 	}
-	rms := &neuralnet.RMSProp{Gradienter: batcher}
-
-	signal := KillSignal()
-
-	trainingData := GenerateData(BigBatchSize)
-	var rollingAverage float64
-	for atomic.LoadUint32(signal) == 0 {
-		samples := DataToVectors(trainingData)
-		neuralnet.SGD(rms, samples, StepSize, 1, BigBatchSize)
-		trainingData = GenerateData(BigBatchSize)
-		t := trainingData[:ValidationCount]
-		score := ClassifierScore(net, t)
-		if rollingAverage == 0 {
-			rollingAverage = score
-		} else {
-			rollingAverage = 0.9*rollingAverage + 0.1*score
-		}
-		log.Printf("Success=%.02f%% rolling=%0.2f%%", score, rollingAverage)
-	}
-
-	file := os.Args[1]
-	data, _ := net.Serialize()
-	if err := ioutil.WriteFile(file, data, 0755); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func CreateNetwork() neuralnet.Network {
-	net := neuralnet.Network{}
-	for i, x := range HiddenSizes {
-		inputSize := 6 * 6 * 8
-		if i > 0 {
-			inputSize = HiddenSizes[i-1]
-		}
-		layer := &neuralnet.DenseLayer{
-			InputCount:  inputSize,
-			OutputCount: x,
-		}
-		net = append(net, layer, neuralnet.Sigmoid{})
-	}
-	layer := &neuralnet.DenseLayer{
-		InputCount:  HiddenSizes[len(HiddenSizes)-1],
-		OutputCount: OutputCount,
-	}
-	net = append(net, layer, &neuralnet.LogSoftmaxLayer{})
-	net.Randomize()
-	return net
-}
-
-func KillSignal() *uint32 {
-	var killFlag uint32
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		<-c
-		signal.Stop(c)
-		fmt.Println("\nCaught interrupt. Ctrl+C again to terminate.")
-		atomic.StoreUint32(&killFlag, 1)
-	}()
-	return &killFlag
-}
-
-func GenerateData(count int) []DataPoint {
-	var res []DataPoint
-	for i := 0; i < count; i++ {
-		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
-		res = append(res, DataPoint{
-			Cube:  RandomScramble(moves),
-			Moves: moves,
+	log.Println("Building forest...")
+	samples := RandomData(NumSamples)
+	forest := idtrees.BuildForest(NumTrees, samples, features, SubSamples, SubAttrs,
+		func(s []idtrees.Sample, a []idtrees.Attr) *idtrees.Tree {
+			return idtrees.ID3(s, a, 0)
 		})
-	}
-	return res
+	log.Println("Cross validating...")
+	validation := RandomData(10000)
+	log.Printf("Baseline: %.02f%%", Baseline(validation))
+	log.Printf("Validation score: %s", ClassifierScore(forest, validation))
+
+	log.Println("TODO: save to file.")
 }
 
-func DataToVectors(d []DataPoint) neuralnet.SampleSet {
-	inputs := make([]linalg.Vector, 0, len(d))
-	outputs := make([]linalg.Vector, 0, len(d))
-	for _, x := range d {
-		inputs = append(inputs, CubeVector(x.Cube))
-		vec := make(linalg.Vector, OutputCount)
-		vec[x.Moves] = 1
-		outputs = append(outputs, vec)
+func Baseline(data []idtrees.Sample) float64 {
+	countMap := map[idtrees.Class]int{}
+	for _, x := range data {
+		countMap[x.Class()]++
 	}
-	return neuralnet.VectorSampleSet(inputs, outputs)
+	var best float64
+	for _, count := range countMap {
+		score := float64(count) / float64(len(data))
+		best = math.Max(best, score)
+	}
+	return best * 100
 }
 
-func ClassifierScore(r neuralnet.Network, data []DataPoint) float64 {
+func ClassifierScore(f idtrees.Forest, data []idtrees.Sample) string {
+	rightCounts := map[int]int{}
+	totalCounts := map[int]int{}
+
 	var numRight int
 	var numTotal int
 	for _, test := range data {
-		guess := ClassifyCube(r, test.Cube)
-		if guess == test.Moves {
+		guess := ClassifyCube(f, test)
+		if guess == test.Class().(int) {
 			numRight++
+			rightCounts[guess]++
 		}
+		totalCounts[test.Class().(int)]++
 		numTotal++
 	}
-	return 100 * float64(numRight) / float64(numTotal)
+
+	res := fmt.Sprintf("total: %.02f%%", 100*float64(numRight)/float64(numTotal))
+	for class, total := range totalCounts {
+		right := rightCounts[class]
+		res += fmt.Sprintf(", %d: %.02f%%", class, 100*float64(right)/float64(total))
+	}
+
+	return res
 }
 
-func ClassifyCube(r neuralnet.Network, c *gocube.CubieCube) int {
-	output := r.Apply(&autofunc.Variable{CubeVector(c)}).Output()
-	var maxIdx int
+func ClassifyCube(f idtrees.Forest, test idtrees.AttrMap) int {
+	outputs := f.Classify(test)
 	var maxVal float64
-	for i, x := range output {
-		if x > maxVal || i == 0 {
-			maxIdx = i
-			maxVal = x
+	var maxClass int
+	for class, val := range outputs {
+		if val > maxVal {
+			maxVal = val
+			maxClass = class.(int)
 		}
 	}
-	return maxIdx
+	return maxClass
 }
