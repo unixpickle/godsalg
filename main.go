@@ -4,29 +4,33 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"os"
+	"time"
 
 	"github.com/unixpickle/weakai/idtrees"
 )
 
 const (
 	NumSamples = 300000
-	NumTrees   = 5000
-	SubSamples = 2000
-	SubAttrs   = 15
+	NumTrees   = 1000
+	SubSamples = 4000
+	SubAttrs   = 30
 
 	MinMoves = 5
 	MaxMoves = 18
 )
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: godsalg <output>")
 		os.Exit(1)
 	}
 
 	var features []idtrees.Attr
-	for i := 0; i < 54+12+8; i++ {
+	for i := 0; i < DataFeatureCount; i++ {
 		features = append(features, i)
 	}
 	log.Println("Building forest...")

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
 
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/weakai/idtrees"
 )
+
+const DataFeatureCount = 54 + 8 + 12 + 4
 
 type DataPoint struct {
 	Stickers *gocube.StickerCube
@@ -30,12 +33,23 @@ func RandomData(count int) []idtrees.Sample {
 
 func (d *DataPoint) Attr(a idtrees.Attr) idtrees.Val {
 	idx := a.(int)
-	if idx < 54 {
+	switch {
+	case idx < 54:
 		return d.Stickers[idx]
-	} else if idx < 54+12 {
+	case idx < 54+12:
 		return d.Cubies.Edges[idx-54].Piece
-	} else {
+	case idx < 54+12+8:
 		return d.Cubies.Corners[idx-(54+12)].Piece
+	case idx == 54+12+8:
+		return d.numBadEdges()
+	case idx == 54+12+8+1:
+		return d.numOrientedCorners()
+	case idx == 54+12+8+2:
+		return d.numPositionedEdges()
+	case idx == 54+12+8+3:
+		return d.numPositionedCorners()
+	default:
+		panic(fmt.Sprintf("unknown feature: %d", idx))
 	}
 }
 
@@ -45,4 +59,44 @@ func (d *DataPoint) Class() idtrees.Class {
 	} else {
 		return 0
 	}
+}
+
+func (d *DataPoint) numBadEdges() int {
+	var count int
+	for _, x := range d.Cubies.Edges[:] {
+		if x.Flip {
+			count++
+		}
+	}
+	return count
+}
+
+func (d *DataPoint) numOrientedCorners() int {
+	var count int
+	for _, x := range d.Cubies.Corners[:] {
+		if x.Orientation == 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func (d *DataPoint) numPositionedEdges() int {
+	var count int
+	for i, x := range d.Cubies.Edges[:] {
+		if x.Piece == i {
+			count++
+		}
+	}
+	return count
+}
+
+func (d *DataPoint) numPositionedCorners() int {
+	var count int
+	for i, x := range d.Cubies.Corners[:] {
+		if x.Piece == i {
+			count++
+		}
+	}
+	return count
 }
