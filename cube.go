@@ -17,6 +17,7 @@ func RandomScramble(length int) *gocube.CubieCube {
 		move := moves[rand.Intn(len(moves))]
 		if moveAxis(move) != axis {
 			moves = allMoves()
+			axis = moveAxis(move)
 		}
 		for i := 0; i < len(moves); i++ {
 			if moves[i].Face() == move.Face() {
