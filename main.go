@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	NumSamples = 300000
+	NumSamples = 2000000
 	BoostSteps = 2000
 
 	MinMoves = 5
-	MaxMoves = 18
+	MaxMoves = 20
 )
 
 func main() {
@@ -46,15 +46,18 @@ func main() {
 		List:    SampleList(samples),
 		Pool:    pool,
 	}
+	validation := RandomData(10000)
 	for i := 0; i < BoostSteps; i++ {
 		cost := booster.Step()
 		log.Printf("Epoch %d: cost=%e score=%d/%d", i, cost,
 			TrainingScore(&booster), len(samples))
+		if i%50 == 0 && i != 0 {
+			log.Printf("Validation score: %s", ClassifierScore(&booster.Sum, validation))
+		}
 	}
 
 	log.Println("Cross validating...")
 	res := &booster.Sum
-	validation := RandomData(10000)
 	log.Printf("Baseline: %.02f%%", Baseline(validation))
 	log.Printf("Validation score: %s", ClassifierScore(res, validation))
 

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	SubSamples = 6000
-	SubAttrs   = 20
+	SubSamples = 10000
+	SubAttrs   = 9
 )
 
 type Classifier struct {
