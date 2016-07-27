@@ -15,7 +15,6 @@ import (
 
 const (
 	NumSamples = 300000
-	NumTrees   = 1000
 	BoostSteps = 2000
 
 	MinMoves = 5
@@ -30,33 +29,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Println("Building samples...")
+	log.Println("Creating samples...")
 	samples := RandomData(NumSamples)
-
-	log.Println("Building trees...")
 	var features []idtrees.Attr
 	for i := 0; i < DataFeatureCount; i++ {
 		features = append(features, i)
 	}
-	pool := NewPool(NumTrees, samples, features)
+	pool := &Pool{
+		Attrs: features,
+	}
 
 	log.Println("Boosting...")
 	booster := boosting.Gradient{
-		Loss:    boosting.SquareLoss{},
+		Loss:    boosting.ExpLoss{},
 		Desired: ClassVec(samples),
 		List:    SampleList(samples),
 		Pool:    pool,
 	}
 	for i := 0; i < BoostSteps; i++ {
 		cost := booster.Step()
-		log.Println("Epoch", i, "cost", cost)
+		log.Printf("Epoch %d: cost=%e score=%d/%d", i, cost,
+			TrainingScore(&booster), len(samples))
 	}
 
 	log.Println("Cross validating...")
 	res := &booster.Sum
-	for _, classifier := range res.Classifiers {
-		classifier.(*Classifier).Outputs = nil
-	}
 	validation := RandomData(10000)
 	log.Printf("Baseline: %.02f%%", Baseline(validation))
 	log.Printf("Validation score: %s", ClassifierScore(res, validation))
@@ -87,6 +84,17 @@ func Baseline(data []idtrees.Sample) float64 {
 		best = math.Max(best, score)
 	}
 	return best * 100
+}
+
+func TrainingScore(g *boosting.Gradient) int {
+	var numRight int
+	for i, desired := range g.Desired {
+		actual := g.OutCache[i]
+		if (actual < 0) == (desired < 0) {
+			numRight++
+		}
+	}
+	return numRight
 }
 
 func ClassifierScore(c boosting.Classifier, data []idtrees.Sample) string {

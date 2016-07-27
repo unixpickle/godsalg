@@ -1,74 +1,56 @@
 package main
 
 import (
-	"github.com/gonum/blas"
-	"github.com/gonum/blas/blas64"
+	"math"
+	"math/rand"
+
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/weakai/boosting"
 	"github.com/unixpickle/weakai/idtrees"
 )
 
 const (
-	SubSamples = 4000
-	SubAttrs   = 30
+	SubSamples = 6000
+	SubAttrs   = 20
 )
 
 type Classifier struct {
-	Tree    *idtrees.Tree
-	Outputs linalg.Vector
+	Tree *idtrees.Tree
 }
 
 func (c *Classifier) Classify(s boosting.SampleList) linalg.Vector {
-	if c.Outputs == nil {
-		return classificationVec(c.Tree, s.(SampleList))
-	} else {
-		res := make(linalg.Vector, len(c.Outputs))
-		copy(res, c.Outputs)
-		return res
-	}
+	return classificationVec(c.Tree, s.(SampleList))
 }
 
 type Pool struct {
-	Trees   []*idtrees.Tree
-	Outputs blas64.General
-}
-
-func NewPool(n int, samples []idtrees.Sample, attrs []idtrees.Attr) *Pool {
-	var res Pool
-
-	res.Outputs.Stride = len(samples)
-	res.Outputs.Cols = len(samples)
-
-	forest := idtrees.BuildForest(n, samples, attrs, SubSamples, SubAttrs,
-		func(s []idtrees.Sample, a []idtrees.Attr) *idtrees.Tree {
-			return idtrees.ID3(s, a, 0)
-		})
-
-	for _, tree := range forest {
-		v := classificationVec(tree, samples)
-		res.Outputs.Data = append(res.Outputs.Data, v...)
-		res.Outputs.Rows++
-		res.Trees = append(res.Trees, tree)
-	}
-
-	return &res
+	Attrs []idtrees.Attr
 }
 
 func (p *Pool) BestClassifier(s boosting.SampleList, weights linalg.Vector) boosting.Classifier {
-	vec := blas64.Vector{
-		Inc:  1,
-		Data: weights,
+	var meanWeight float64
+	for _, w := range weights {
+		meanWeight += math.Pow(w, 2)
 	}
-	output := blas64.Vector{
-		Inc:  1,
-		Data: make([]float64, len(p.Trees)),
+	meanWeight /= float64(s.Len())
+
+	chooseProb := float64(SubSamples) / float64(s.Len())
+	var samples []idtrees.Sample
+	for i, w := range weights {
+		desirability := chooseProb * math.Pow(w, 2) / meanWeight
+		if math.Abs(rand.NormFloat64()) < desirability {
+			samples = append(samples, s.(SampleList)[i])
+		}
 	}
-	blas64.Gemv(blas.NoTrans, 1, p.Outputs, vec, 0, output)
-	largest := blas64.Iamax(len(p.Trees), output)
-	startIdx := largest * p.Outputs.Cols
+
+	attrs := make([]idtrees.Attr, SubAttrs)
+	perm := rand.Perm(len(p.Attrs))
+	for i, x := range perm[:SubAttrs] {
+		attrs[i] = p.Attrs[x]
+	}
+
+	tree := idtrees.ID3(samples, attrs, 0)
 	return &Classifier{
-		Tree:    p.Trees[largest],
-		Outputs: p.Outputs.Data[startIdx : startIdx+p.Outputs.Cols],
+		Tree: tree,
 	}
 }
 
@@ -95,4 +77,22 @@ func classify(t *idtrees.Tree, sample idtrees.AttrMap) int {
 		}
 	}
 	return maxClass
+}
+
+type weightSorter struct {
+	weights linalg.Vector
+	indices []int
+}
+
+func (w *weightSorter) Len() int {
+	return len(w.weights)
+}
+
+func (w *weightSorter) Swap(i, j int) {
+	w.weights[i], w.weights[j] = w.weights[j], w.weights[i]
+	w.indices[i], w.indices[j] = w.indices[j], w.indices[i]
+}
+
+func (w *weightSorter) Less(i, j int) bool {
+	return w.weights[i] > w.weights[j]
 }
