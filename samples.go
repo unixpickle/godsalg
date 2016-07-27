@@ -10,6 +10,12 @@ import (
 
 const DataFeatureCount = 54 + 8 + 12 + 4
 
+type SampleList []idtrees.Sample
+
+func (s SampleList) Len() int {
+	return len(s)
+}
+
 type DataPoint struct {
 	Stickers *gocube.StickerCube
 	Cubies   *gocube.CubieCube

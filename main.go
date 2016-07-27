@@ -8,14 +8,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/unixpickle/num-analysis/linalg"
+	"github.com/unixpickle/weakai/boosting"
 	"github.com/unixpickle/weakai/idtrees"
 )
 
 const (
 	NumSamples = 300000
 	NumTrees   = 1000
-	SubSamples = 4000
-	SubAttrs   = 30
+	BoostSteps = 2000
 
 	MinMoves = 5
 	MaxMoves = 18
@@ -29,22 +30,50 @@ func main() {
 		os.Exit(1)
 	}
 
+	log.Println("Building samples...")
+	samples := RandomData(NumSamples)
+
+	log.Println("Building trees...")
 	var features []idtrees.Attr
 	for i := 0; i < DataFeatureCount; i++ {
 		features = append(features, i)
 	}
-	log.Println("Building forest...")
-	samples := RandomData(NumSamples)
-	forest := idtrees.BuildForest(NumTrees, samples, features, SubSamples, SubAttrs,
-		func(s []idtrees.Sample, a []idtrees.Attr) *idtrees.Tree {
-			return idtrees.ID3(s, a, 0)
-		})
+	pool := NewPool(NumTrees, samples, features)
+
+	log.Println("Boosting...")
+	booster := boosting.Gradient{
+		Loss:    boosting.SquareLoss{},
+		Desired: ClassVec(samples),
+		List:    SampleList(samples),
+		Pool:    pool,
+	}
+	for i := 0; i < BoostSteps; i++ {
+		cost := booster.Step()
+		log.Println("Epoch", i, "cost", cost)
+	}
+
 	log.Println("Cross validating...")
+	res := &booster.Sum
+	for _, classifier := range res.Classifiers {
+		classifier.(*Classifier).Outputs = nil
+	}
 	validation := RandomData(10000)
 	log.Printf("Baseline: %.02f%%", Baseline(validation))
-	log.Printf("Validation score: %s", ClassifierScore(forest, validation))
+	log.Printf("Validation score: %s", ClassifierScore(res, validation))
 
 	log.Println("TODO: save to file.")
+}
+
+func ClassVec(data []idtrees.Sample) linalg.Vector {
+	res := make(linalg.Vector, len(data))
+	for i, x := range data {
+		if x.Class().(int) == 0 {
+			res[i] = -1
+		} else {
+			res[i] = 1
+		}
+	}
+	return res
 }
 
 func Baseline(data []idtrees.Sample) float64 {
@@ -60,19 +89,21 @@ func Baseline(data []idtrees.Sample) float64 {
 	return best * 100
 }
 
-func ClassifierScore(f idtrees.Forest, data []idtrees.Sample) string {
+func ClassifierScore(c boosting.Classifier, data []idtrees.Sample) string {
+	actualVec := c.Classify(SampleList(data))
+
 	rightCounts := map[int]int{}
 	totalCounts := map[int]int{}
 
 	var numRight int
 	var numTotal int
-	for _, test := range data {
-		guess := ClassifyCube(f, test)
-		if guess == test.Class().(int) {
+	for i, actual := range actualVec {
+		realClass := data[i].Class().(int)
+		if (realClass == 0) == (actual < 0) {
 			numRight++
-			rightCounts[guess]++
+			rightCounts[realClass]++
 		}
-		totalCounts[test.Class().(int)]++
+		totalCounts[realClass]++
 		numTotal++
 	}
 
@@ -83,17 +114,4 @@ func ClassifierScore(f idtrees.Forest, data []idtrees.Sample) string {
 	}
 
 	return res
-}
-
-func ClassifyCube(f idtrees.Forest, test idtrees.AttrMap) int {
-	outputs := f.Classify(test)
-	var maxVal float64
-	var maxClass int
-	for class, val := range outputs {
-		if val > maxVal {
-			maxVal = val
-			maxClass = class.(int)
-		}
-	}
-	return maxClass
 }
