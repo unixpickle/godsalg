@@ -6,28 +6,30 @@ import (
 	"log"
 	"math/rand"
 	"os"
-	"os/signal"
-	"sync/atomic"
+	"time"
 
 	"github.com/unixpickle/autofunc"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/num-analysis/linalg"
+	"github.com/unixpickle/serializer"
+	"github.com/unixpickle/sgd"
 	"github.com/unixpickle/weakai/neuralnet"
+	"github.com/unixpickle/weightnorm"
 )
 
 const (
-	StepSize     = 1e-5
-	BigBatchSize = 4000
-	BatchSize    = 120
-
-	ValidationCount = 200
+	StepSize  = 1e-4
+	BatchSize = 100
 
 	OutputCount = 21
 	MinMoves    = 9
 	MaxMoves    = 16
 )
 
-var HiddenSizes = []int{3000, 2000}
+func init() {
+	t := sinLayer{}.SerializerType()
+	serializer.RegisterTypedDeserializer(t, deserializeSinLayer)
+}
 
 type DataPoint struct {
 	Cube  *gocube.CubieCube
@@ -35,39 +37,41 @@ type DataPoint struct {
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: godsalg <output>")
 		os.Exit(1)
 	}
 
 	net := CreateNetwork()
-	batcher := &neuralnet.BatchRGradienter{
+	g := &sgd.Adam{Gradienter: &neuralnet.BatchRGradienter{
 		Learner:      net.BatchLearner(),
 		CostFunc:     neuralnet.DotCost{},
-		MaxBatchSize: 15,
-	}
-	rms := &neuralnet.RMSProp{Gradienter: batcher}
+		MaxBatchSize: BatchSize,
+	}}
 
-	signal := KillSignal()
+	s := DataToVectors(GenerateData(1000000))
 
-	trainingData := GenerateData(BigBatchSize)
-	var rollingAverage float64
-	for atomic.LoadUint32(signal) == 0 {
-		samples := DataToVectors(trainingData)
-		neuralnet.SGD(rms, samples, StepSize, 1, BigBatchSize)
-		trainingData = GenerateData(BigBatchSize)
-		t := trainingData[:ValidationCount]
-		score := ClassifierScore(net, t)
-		if rollingAverage == 0 {
-			rollingAverage = score
-		} else {
-			rollingAverage = 0.9*rollingAverage + 0.1*score
+	var iter int
+	var last sgd.SampleSet
+	sgd.SGDMini(g, s, StepSize, BatchSize, func(batch sgd.SampleSet) bool {
+		if iter%4 == 0 {
+			var lastCost float64
+			if last != nil {
+				lastCost = neuralnet.TotalCost(neuralnet.DotCost{}, net, last)
+			}
+			cost := neuralnet.TotalCost(neuralnet.DotCost{}, net, batch)
+			lastCost /= BatchSize
+			cost /= BatchSize
+			log.Printf("iter %d: cost=%f last=%f", iter, cost, lastCost)
+			last = batch.Copy()
 		}
-		log.Printf("Success=%.02f%% rolling=%0.2f%%", score, rollingAverage)
-	}
+		iter++
+		return true
+	})
 
 	file := os.Args[1]
-	data, _ := net.Serialize()
+	data, _ := serializer.SerializeWithType(net)
 	if err := ioutil.WriteFile(file, data, 0755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -75,38 +79,28 @@ func main() {
 }
 
 func CreateNetwork() neuralnet.Network {
-	net := neuralnet.Network{}
-	for i, x := range HiddenSizes {
-		inputSize := 6 * 6 * 8
-		if i > 0 {
-			inputSize = HiddenSizes[i-1]
+	data, err := ioutil.ReadFile(os.Args[1])
+	if err == nil {
+		log.Println("Using existing network.")
+		net, err := serializer.DeserializeWithType(data)
+		if err != nil {
+			panic(err)
 		}
-		layer := &neuralnet.DenseLayer{
-			InputCount:  inputSize,
-			OutputCount: x,
-		}
-		net = append(net, layer, neuralnet.Sigmoid{})
+		return net.(neuralnet.Network)
 	}
-	layer := &neuralnet.DenseLayer{
-		InputCount:  HiddenSizes[len(HiddenSizes)-1],
-		OutputCount: OutputCount,
-	}
-	net = append(net, layer, &neuralnet.LogSoftmaxLayer{})
-	net.Randomize()
-	return net
-}
 
-func KillSignal() *uint32 {
-	var killFlag uint32
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		<-c
-		signal.Stop(c)
-		fmt.Println("\nCaught interrupt. Ctrl+C again to terminate.")
-		atomic.StoreUint32(&killFlag, 1)
-	}()
-	return &killFlag
+	log.Println("Creating new network.")
+
+	return neuralnet.Network{
+		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
+		&sinLayer{},
+		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(1000, 500)),
+		&sinLayer{},
+		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
+		&neuralnet.HyperbolicTangent{},
+		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, OutputCount)),
+		&neuralnet.LogSoftmaxLayer{},
+	}
 }
 
 func GenerateData(count int) []DataPoint {
@@ -121,7 +115,7 @@ func GenerateData(count int) []DataPoint {
 	return res
 }
 
-func DataToVectors(d []DataPoint) neuralnet.SampleSet {
+func DataToVectors(d []DataPoint) sgd.SampleSet {
 	inputs := make([]linalg.Vector, 0, len(d))
 	outputs := make([]linalg.Vector, 0, len(d))
 	for _, x := range d {
@@ -157,4 +151,20 @@ func ClassifyCube(r neuralnet.Network, c *gocube.CubieCube) int {
 		}
 	}
 	return maxIdx
+}
+
+type sinLayer struct {
+	autofunc.Sin
+}
+
+func deserializeSinLayer(d []byte) (*sinLayer, error) {
+	return &sinLayer{}, nil
+}
+
+func (_ sinLayer) SerializerType() string {
+	return "github.com/unixpickle/lightsout.sinLayer"
+}
+
+func (_ sinLayer) Serialize() ([]byte, error) {
+	return nil, nil
 }
