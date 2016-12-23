@@ -50,7 +50,9 @@ func main() {
 		MaxBatchSize: BatchSize,
 	}}
 
+	log.Println("Creating samples...")
 	s := DataToVectors(GenerateData(1000000))
+	log.Println("Training...")
 
 	var iter int
 	var last sgd.SampleSet
@@ -93,14 +95,24 @@ func CreateNetwork() neuralnet.Network {
 
 	return neuralnet.Network{
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
-		&sinLayer{},
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(1000, 500)),
+		&neuralnet.HyperbolicTangent{},
+		varyingFreqLayer(1, 60, 1000, 500),
 		&sinLayer{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
 		&neuralnet.HyperbolicTangent{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, OutputCount)),
 		&neuralnet.LogSoftmaxLayer{},
 	}
+}
+
+func varyingFreqLayer(minScale, maxScale float64, in, out int) neuralnet.Layer {
+	res := weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(in, out))
+	mags := res.Mags[0]
+	for i := range mags.Vector {
+		scale := minScale + (maxScale-minScale)*rand.Float64()
+		mags.Vector[i] *= scale
+	}
+	return res
 }
 
 func GenerateData(count int) []DataPoint {
