@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"time"
@@ -24,6 +25,11 @@ const (
 	OutputCount = 21
 	MinMoves    = 9
 	MaxMoves    = 16
+
+	MinScale = 1
+	MaxScale = 30
+
+	SparseInitCount = 30
 )
 
 func init() {
@@ -96,7 +102,7 @@ func CreateNetwork() neuralnet.Network {
 	return neuralnet.Network{
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
 		&neuralnet.HyperbolicTangent{},
-		varyingFreqLayer(1, 60, 1000, 500),
+		varyingFreqLayer(MinScale, MaxScale, 1000, 500),
 		&sinLayer{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
 		&neuralnet.HyperbolicTangent{},
@@ -112,6 +118,20 @@ func varyingFreqLayer(minScale, maxScale float64, in, out int) neuralnet.Layer {
 		scale := minScale + (maxScale-minScale)*rand.Float64()
 		mags.Vector[i] *= scale
 	}
+
+	// Sparse initializations will hopefully allow us to
+	// utilize periodic values better.
+	weights := res.Weights[0]
+	for row := 0; row < out; row++ {
+		rowVec := weights.Vector[row*in : (row+1)*in]
+		for i := range rowVec {
+			rowVec[i] = 0
+		}
+		for _, i := range rand.Perm(in)[:SparseInitCount] {
+			rowVec[i] = rand.NormFloat64() / math.Sqrt(SparseInitCount)
+		}
+	}
+
 	return res
 }
 
