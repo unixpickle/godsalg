@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	StepSize  = 1e-4
-	BatchSize = 100
+	StepSize    = 1e-4
+	BatchSize   = 100
+	LogInterval = 64
 
 	OutputCount = 21
 	MinMoves    = 9
@@ -63,12 +64,13 @@ func main() {
 	var iter int
 	var last sgd.SampleSet
 	sgd.SGDMini(g, s, StepSize, BatchSize, func(batch sgd.SampleSet) bool {
-		if iter%4 == 0 {
+		if iter%LogInterval == 0 {
 			var lastCost float64
+			bl := net.BatchLearner()
 			if last != nil {
-				lastCost = neuralnet.TotalCost(neuralnet.DotCost{}, net, last)
+				lastCost = neuralnet.TotalCostBatcher(neuralnet.DotCost{}, bl, last, 0)
 			}
-			cost := neuralnet.TotalCost(neuralnet.DotCost{}, net, batch)
+			cost := neuralnet.TotalCostBatcher(neuralnet.DotCost{}, bl, batch, 0)
 			lastCost /= BatchSize
 			cost /= BatchSize
 			log.Printf("iter %d: cost=%f last=%f", iter, cost, lastCost)
@@ -101,7 +103,7 @@ func CreateNetwork() neuralnet.Network {
 
 	return neuralnet.Network{
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
-		&neuralnet.HyperbolicTangent{},
+		&neuralnet.Sigmoid{},
 		varyingFreqLayer(MinScale, MaxScale, 1000, 500),
 		&sinLayer{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
