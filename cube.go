@@ -9,10 +9,11 @@ import (
 
 // RandomScramble generates a move-based scramble
 // of a certain length.
-func RandomScramble(length int) *gocube.CubieCube {
+func RandomScramble(length int) (*gocube.CubieCube, gocube.Move) {
 	moves := allMoves()
 	res := gocube.SolvedCubieCube()
 	axis := -1
+	lastMove := gocube.Move(0)
 	for i := 0; i < length; i++ {
 		move := moves[rand.Intn(len(moves))]
 		if moveAxis(move) != axis {
@@ -27,8 +28,9 @@ func RandomScramble(length int) *gocube.CubieCube {
 			}
 		}
 		res.Move(move)
+		lastMove = move
 	}
-	return &res
+	return &res, lastMove.Inverse()
 }
 
 // CubeVector returns a vectorized representation of

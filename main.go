@@ -22,8 +22,8 @@ const (
 	StepSize  = 1e-4
 	BatchSize = 100
 
-	OutputCount = 21
-	MinMoves    = 9
+	OutputCount = 18
+	MinMoves    = 1
 	MaxMoves    = 16
 
 	MinScale = 1
@@ -39,7 +39,7 @@ func init() {
 
 type DataPoint struct {
 	Cube  *gocube.CubieCube
-	Moves int
+	First gocube.Move
 }
 
 func main() {
@@ -139,9 +139,10 @@ func GenerateData(count int) []DataPoint {
 	var res []DataPoint
 	for i := 0; i < count; i++ {
 		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
+		cube, first := RandomScramble(moves)
 		res = append(res, DataPoint{
-			Cube:  RandomScramble(moves),
-			Moves: moves,
+			Cube:  cube,
+			First: first,
 		})
 	}
 	return res
@@ -153,36 +154,10 @@ func DataToVectors(d []DataPoint) sgd.SampleSet {
 	for _, x := range d {
 		inputs = append(inputs, CubeVector(x.Cube))
 		vec := make(linalg.Vector, OutputCount)
-		vec[x.Moves] = 1
+		vec[x.First] = 1
 		outputs = append(outputs, vec)
 	}
 	return neuralnet.VectorSampleSet(inputs, outputs)
-}
-
-func ClassifierScore(r neuralnet.Network, data []DataPoint) float64 {
-	var numRight int
-	var numTotal int
-	for _, test := range data {
-		guess := ClassifyCube(r, test.Cube)
-		if guess == test.Moves {
-			numRight++
-		}
-		numTotal++
-	}
-	return 100 * float64(numRight) / float64(numTotal)
-}
-
-func ClassifyCube(r neuralnet.Network, c *gocube.CubieCube) int {
-	output := r.Apply(&autofunc.Variable{CubeVector(c)}).Output()
-	var maxIdx int
-	var maxVal float64
-	for i, x := range output {
-		if x > maxVal || i == 0 {
-			maxIdx = i
-			maxVal = x
-		}
-	}
-	return maxIdx
 }
 
 type sinLayer struct {
