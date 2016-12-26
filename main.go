@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/unixpickle/autofunc"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
@@ -32,11 +31,6 @@ const (
 
 	SparseInitCount = 30
 )
-
-func init() {
-	t := sinLayer{}.SerializerType()
-	serializer.RegisterTypedDeserializer(t, deserializeSinLayer)
-}
 
 type DataPoint struct {
 	Cube  *gocube.CubieCube
@@ -105,7 +99,7 @@ func CreateNetwork() neuralnet.Network {
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
 		&neuralnet.Sigmoid{},
 		varyingFreqLayer(MinScale, MaxScale, 1000, 500),
-		&sinLayer{},
+		&neuralnet.Sin{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
 		&neuralnet.HyperbolicTangent{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, OutputCount)),
@@ -160,20 +154,4 @@ func DataToVectors(d []DataPoint) sgd.SampleSet {
 		outputs = append(outputs, vec)
 	}
 	return neuralnet.VectorSampleSet(inputs, outputs)
-}
-
-type sinLayer struct {
-	autofunc.Sin
-}
-
-func deserializeSinLayer(d []byte) (*sinLayer, error) {
-	return &sinLayer{}, nil
-}
-
-func (_ sinLayer) SerializerType() string {
-	return "github.com/unixpickle/lightsout.sinLayer"
-}
-
-func (_ sinLayer) Serialize() ([]byte, error) {
-	return nil, nil
 }
