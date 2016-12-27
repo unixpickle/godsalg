@@ -1,4 +1,4 @@
-package main
+package godsalg
 
 import (
 	"math/rand"

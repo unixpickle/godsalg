@@ -4,32 +4,28 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math"
 	"math/rand"
 	"os"
 	"time"
 
 	"github.com/unixpickle/gocube"
+	"github.com/unixpickle/godsalg"
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
 	"github.com/unixpickle/sgd"
 	"github.com/unixpickle/weakai/neuralnet"
-	"github.com/unixpickle/weightnorm"
 )
 
 const (
 	StepSize    = 1e-4
 	BatchSize   = 100
+	SampleCount = 1000000
+	SampleCount = 10
 	LogInterval = 64
 
-	OutputCount = 18
-	MinMoves    = 1
-	MaxMoves    = 16
-
-	MinScale = 1
-	MaxScale = 30
-
-	SparseInitCount = 30
+	MinMoves  = 1
+	MaxMoves  = 16
+	MoveCount = 18
 )
 
 type DataPoint struct {
@@ -44,7 +40,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	net := CreateNetwork()
+	net := godsalg.CreateNetwork()
 	g := &sgd.Adam{Gradienter: &neuralnet.BatchRGradienter{
 		Learner:      net.BatchLearner(),
 		CostFunc:     neuralnet.DotCost{},
@@ -52,7 +48,7 @@ func main() {
 	}}
 
 	log.Println("Creating samples...")
-	s := DataToVectors(GenerateData(1000000))
+	s := DataToVectors(GenerateData(SampleCount))
 	log.Println("Training...")
 
 	var iter int
@@ -82,60 +78,11 @@ func main() {
 	}
 }
 
-func CreateNetwork() neuralnet.Network {
-	data, err := ioutil.ReadFile(os.Args[1])
-	if err == nil {
-		log.Println("Using existing network.")
-		net, err := serializer.DeserializeWithType(data)
-		if err != nil {
-			panic(err)
-		}
-		return net.(neuralnet.Network)
-	}
-
-	log.Println("Creating new network.")
-
-	return neuralnet.Network{
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
-		&neuralnet.Sigmoid{},
-		varyingFreqLayer(MinScale, MaxScale, 1000, 500),
-		&neuralnet.Sin{},
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
-		&neuralnet.HyperbolicTangent{},
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, OutputCount)),
-		&neuralnet.LogSoftmaxLayer{},
-	}
-}
-
-func varyingFreqLayer(minScale, maxScale float64, in, out int) neuralnet.Layer {
-	res := weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(in, out))
-	mags := res.Mags[0]
-	for i := range mags.Vector {
-		scale := minScale + (maxScale-minScale)*rand.Float64()
-		mags.Vector[i] *= scale
-	}
-
-	// Sparse initializations will hopefully allow us to
-	// utilize periodic values better.
-	weights := res.Weights[0]
-	for row := 0; row < out; row++ {
-		rowVec := weights.Vector[row*in : (row+1)*in]
-		for i := range rowVec {
-			rowVec[i] = 0
-		}
-		for _, i := range rand.Perm(in)[:SparseInitCount] {
-			rowVec[i] = rand.NormFloat64() / math.Sqrt(SparseInitCount)
-		}
-	}
-
-	return res
-}
-
 func GenerateData(count int) []DataPoint {
 	var res []DataPoint
 	for i := 0; i < count; i++ {
 		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
-		cube, first := RandomScramble(moves)
+		cube, first := godsalg.RandomScramble(moves)
 		res = append(res, DataPoint{
 			Cube:  cube,
 			First: first,
@@ -148,8 +95,8 @@ func DataToVectors(d []DataPoint) sgd.SampleSet {
 	inputs := make([]linalg.Vector, 0, len(d))
 	outputs := make([]linalg.Vector, 0, len(d))
 	for _, x := range d {
-		inputs = append(inputs, CubeVector(x.Cube))
-		vec := make(linalg.Vector, OutputCount)
+		inputs = append(inputs, godsalg.CubeVector(x.Cube))
+		vec := make(linalg.Vector, MoveCount)
 		vec[x.First] = 1
 		outputs = append(outputs, vec)
 	}
