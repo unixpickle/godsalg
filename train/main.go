@@ -20,7 +20,6 @@ const (
 	StepSize    = 1e-4
 	BatchSize   = 100
 	SampleCount = 1000000
-	SampleCount = 10
 	LogInterval = 64
 
 	MinMoves  = 1
