@@ -35,9 +35,9 @@ func CreateNetwork() neuralnet.Network {
 	return neuralnet.Network{
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
 		&neuralnet.Sigmoid{},
-		varyingFreqLayer(minScale, maxScale, 1000, 500),
+		varyingFreqLayer(minScale, maxScale, 1000, 1000),
 		&neuralnet.Sin{},
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, 500)),
+		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(1000, 500)),
 		&neuralnet.HyperbolicTangent{},
 		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, moveCount)),
 		&neuralnet.LogSoftmaxLayer{},
