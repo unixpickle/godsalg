@@ -16,6 +16,8 @@ import (
 	_ "github.com/unixpickle/weightnorm"
 )
 
+const BatchSize = 30
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: solve <network>")
@@ -42,7 +44,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Bad state:", err)
 		os.Exit(1)
 	}
-	for i := 0; i < 1000; i++ {
+	for i := 0; true; i++ {
 		solution := sampleSolution(*state, net)
 		if solution != nil {
 			fmt.Println("Solution:", solution)
@@ -54,16 +56,27 @@ func main() {
 }
 
 func sampleSolution(start gocube.CubieCube, net neuralnet.Network) []gocube.Move {
-	var solution []gocube.Move
+	solutions := make([][]gocube.Move, BatchSize)
+	states := make([]*gocube.CubieCube, BatchSize)
+	for i := range states {
+		c := start
+		states[i] = &c
+	}
 	for i := 0; i < 21; i++ {
-		if start.Solved() {
-			return solution
+		var inVec linalg.Vector
+		for j, x := range states {
+			if x.Solved() {
+				return solutions[j]
+			}
+			inVec = append(inVec, godsalg.CubeVector(x)...)
 		}
-		vec := godsalg.CubeVector(&start)
-		output := net.Apply(&autofunc.Variable{Vector: vec}).Output()
-		move := selectMoveVector(output)
-		solution = append(solution, move)
-		start.Move(move)
+		output := net.BatchLearner().Batch(&autofunc.Variable{Vector: inVec}, BatchSize)
+		parts := autofunc.Split(BatchSize, output)
+		for j, part := range parts {
+			move := selectMoveVector(part.Output())
+			solutions[j] = append(solutions[j], move)
+			states[j].Move(move)
+		}
 	}
 	return nil
 }
