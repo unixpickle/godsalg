@@ -19,7 +19,7 @@ import (
 const (
 	StepSize    = 1e-4
 	BatchSize   = 100
-	SampleCount = 1000000
+	SampleCount = 500000
 	LogInterval = 64
 
 	MinMoves  = 1
@@ -52,6 +52,7 @@ func main() {
 
 	var iter int
 	var last sgd.SampleSet
+	var seenSamples int
 	sgd.SGDMini(g, s, StepSize, BatchSize, func(batch sgd.SampleSet) bool {
 		if iter%LogInterval == 0 {
 			var lastCost float64
@@ -64,6 +65,13 @@ func main() {
 			cost /= BatchSize
 			log.Printf("iter %d: cost=%f last=%f", iter, cost, lastCost)
 			last = batch.Copy()
+		}
+		seenSamples += batch.Len()
+		if seenSamples > SampleCount {
+			log.Println("Creating more samples...")
+			newData := DataToVectors(GenerateData(SampleCount))
+			copy(s.(sgd.SliceSampleSet), newData.(sgd.SliceSampleSet))
+			seenSamples = 0
 		}
 		iter++
 		return true
