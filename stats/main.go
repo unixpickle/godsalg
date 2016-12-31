@@ -8,13 +8,13 @@ import (
 	"github.com/unixpickle/autofunc"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/godsalg"
+	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
 	"github.com/unixpickle/weakai/neuralnet"
 )
 
 const (
-	MaxMoves    = 16
-	LogInterval = 10
+	MaxMoves = 16
 )
 
 func main() {
@@ -37,32 +37,41 @@ func main() {
 	histogram := make([]float64, MaxMoves)
 	total := make([]float64, MaxMoves)
 	for i := 0; true; i++ {
-		moves := (i % MaxMoves) + 1
-		scramble, _ := godsalg.RandomScramble(moves)
-		total[moves-1]++
-		if solves(net, *scramble) {
-			histogram[moves-1]++
-		}
-		if i%LogInterval == 0 {
-			for i := 1; i <= MaxMoves; i++ {
-				pct := histogram[i-1] / total[i-1]
-				fmt.Println(i, "moves:", pct*100, "%")
+		solves := roundOfSolves(net)
+		for i, x := range solves {
+			if x {
+				histogram[i]++
 			}
+			total[i]++
+		}
+		for i := 1; i <= MaxMoves; i++ {
+			pct := histogram[i-1] / total[i-1]
+			fmt.Println(i, "moves:", pct*100, "%")
 		}
 	}
 }
 
-func solves(net neuralnet.Network, cube gocube.CubieCube) bool {
-	for i := 0; i < 21; i++ {
-		if cube.Solved() {
-			return true
-		}
-		vec := godsalg.CubeVector(&cube)
-		output := net.Apply(&autofunc.Variable{Vector: vec}).Output()
-		_, move := output.Max()
-		cube.Move(gocube.Move(move))
+func roundOfSolves(net neuralnet.Network) []bool {
+	cubes := make([]*gocube.CubieCube, MaxMoves)
+	for i := range cubes {
+		scramble, _ := godsalg.RandomScramble(i + 1)
+		cubes[i] = scramble
 	}
-	return false
+	res := make([]bool, MaxMoves)
+	for i := 0; i < 21; i++ {
+		var in linalg.Vector
+		for j, c := range cubes {
+			res[j] = res[j] || c.Solved()
+			in = append(in, godsalg.CubeVector(c)...)
+		}
+		inRes := &autofunc.Variable{Vector: in}
+		out := net.BatchLearner().Batch(inRes, MaxMoves)
+		for j, moveVec := range autofunc.Split(MaxMoves, out) {
+			_, move := moveVec.Output().Max()
+			cubes[j].Move(gocube.Move(move))
+		}
+	}
+	return res
 }
 
 func die(args ...interface{}) {
