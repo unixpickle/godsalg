@@ -2,35 +2,30 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"os"
 	"time"
 
-	"github.com/unixpickle/gocube"
+	"github.com/unixpickle/anydiff"
+	"github.com/unixpickle/anynet"
+	"github.com/unixpickle/anynet/anyff"
+	"github.com/unixpickle/anynet/anysgd"
+	"github.com/unixpickle/anyvec"
+	"github.com/unixpickle/anyvec/anyvec32"
 	"github.com/unixpickle/godsalg"
-	"github.com/unixpickle/num-analysis/linalg"
+	"github.com/unixpickle/rip"
 	"github.com/unixpickle/serializer"
-	"github.com/unixpickle/sgd"
-	"github.com/unixpickle/weakai/neuralnet"
 )
 
 const (
-	StepSize    = 1e-4
-	BatchSize   = 100
-	SampleCount = 500000
-	LogInterval = 64
+	BatchSize = 100
+	StepSize  = 1e-4
 
 	MinMoves  = 1
 	MaxMoves  = 16
 	MoveCount = 18
 )
-
-type DataPoint struct {
-	Cube  *gocube.CubieCube
-	First gocube.Move
-}
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
@@ -39,73 +34,78 @@ func main() {
 		os.Exit(1)
 	}
 
-	net := godsalg.CreateNetwork()
-	g := &sgd.Adam{Gradienter: &neuralnet.BatchRGradienter{
-		Learner:      net.BatchLearner(),
-		CostFunc:     neuralnet.DotCost{},
-		MaxBatchSize: BatchSize,
-	}}
+	c := anyvec32.CurrentCreator()
+	net := godsalg.CreateNetwork(c, os.Args[1])
 
-	log.Println("Creating samples...")
-	s := DataToVectors(GenerateData(SampleCount))
 	log.Println("Training...")
+	t := &anyff.Trainer{
+		Net:     net,
+		Cost:    anynet.DotCost{},
+		Params:  net.Parameters(),
+		Average: true,
+	}
 
-	var iter int
-	var last sgd.SampleSet
-	var seenSamples int
-	sgd.SGDMini(g, s, StepSize, BatchSize, func(batch sgd.SampleSet) bool {
-		if iter%LogInterval == 0 {
-			var lastCost float64
-			bl := net.BatchLearner()
-			if last != nil {
-				lastCost = neuralnet.TotalCostBatcher(neuralnet.DotCost{}, bl, last, 0)
-			}
-			cost := neuralnet.TotalCostBatcher(neuralnet.DotCost{}, bl, batch, 0)
-			lastCost /= BatchSize
-			cost /= BatchSize
-			log.Printf("iter %d: cost=%f last=%f", iter, cost, lastCost)
-			last = batch.Copy()
-		}
-		seenSamples += batch.Len()
-		if seenSamples > SampleCount {
-			log.Println("Creating more samples...")
-			newData := DataToVectors(GenerateData(SampleCount))
-			copy(s.(sgd.SliceSampleSet), newData.(sgd.SliceSampleSet))
-			seenSamples = 0
-		}
-		iter++
-		return true
-	})
+	var iterNum int
+	s := &anysgd.SGD{
+		Fetcher:     &Fetcher{Creator: c},
+		Gradienter:  t,
+		Transformer: &anysgd.Adam{},
+		Samples:     DummySampleList(BatchSize),
+		Rater:       anysgd.ConstRater(StepSize),
+		StatusFunc: func(b anysgd.Batch) {
+			log.Printf("iter %d: cost=%v", iterNum, t.LastCost)
+			iterNum++
+		},
+		BatchSize: BatchSize,
+	}
+
+	log.Println("Press ctrl+c once to stop...")
+	s.Run(rip.NewRIP().Chan())
 
 	file := os.Args[1]
-	data, _ := serializer.SerializeWithType(net)
-	if err := ioutil.WriteFile(file, data, 0755); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if err := serializer.SaveAny(file, net); err != nil {
+		fmt.Fprintln(os.Stderr, "Save error:", err)
 		os.Exit(1)
 	}
 }
 
-func GenerateData(count int) []DataPoint {
-	var res []DataPoint
-	for i := 0; i < count; i++ {
-		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
-		cube, first := godsalg.RandomScramble(moves)
-		res = append(res, DataPoint{
-			Cube:  cube,
-			First: first,
-		})
-	}
-	return res
+type DummySampleList int
+
+func (d DummySampleList) Len() int {
+	return int(d)
 }
 
-func DataToVectors(d []DataPoint) sgd.SampleSet {
-	inputs := make([]linalg.Vector, 0, len(d))
-	outputs := make([]linalg.Vector, 0, len(d))
-	for _, x := range d {
-		inputs = append(inputs, godsalg.CubeVector(x.Cube))
-		vec := make(linalg.Vector, MoveCount)
-		vec[x.First] = 1
-		outputs = append(outputs, vec)
+func (d DummySampleList) Swap(i, j int) {
+}
+
+func (d DummySampleList) Slice(i, j int) anysgd.SampleList {
+	return DummySampleList(j - i)
+}
+
+type Fetcher struct {
+	Creator anyvec.Creator
+}
+
+func (f *Fetcher) Fetch(s anysgd.SampleList) (anysgd.Batch, error) {
+	var inVec []float64
+	var outVec []float64
+	for i := 0; i < int(s.(DummySampleList)); i++ {
+		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
+		cube, first := godsalg.RandomScramble(moves)
+		inVec = append(inVec, godsalg.CubeVector(cube)...)
+
+		oneHot := make([]float64, MoveCount)
+		oneHot[first] = 1
+		outVec = append(outVec, oneHot...)
 	}
-	return neuralnet.VectorSampleSet(inputs, outputs)
+
+	return &anyff.Batch{
+		Inputs: anydiff.NewConst(
+			f.Creator.MakeVectorData(f.Creator.MakeNumericList(inVec)),
+		),
+		Outputs: anydiff.NewConst(
+			f.Creator.MakeVectorData(f.Creator.MakeNumericList(outVec)),
+		),
+		Num: int(s.(DummySampleList)),
+	}, nil
 }

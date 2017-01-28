@@ -4,7 +4,6 @@ import (
 	"math/rand"
 
 	"github.com/unixpickle/gocube"
-	"github.com/unixpickle/num-analysis/linalg"
 )
 
 // RandomScramble generates a move-based scramble
@@ -35,9 +34,9 @@ func RandomScramble(length int) (*gocube.CubieCube, gocube.Move) {
 
 // CubeVector returns a vectorized representation of
 // the stickers of a cube.
-func CubeVector(c *gocube.CubieCube) linalg.Vector {
+func CubeVector(c *gocube.CubieCube) []float64 {
 	stickerCube := c.StickerCube()
-	res := make(linalg.Vector, 8*6*6)
+	res := make([]float64, 8*6*6)
 
 	var stickerIdx int
 	for i, sticker := range stickerCube[:] {

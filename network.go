@@ -1,69 +1,72 @@
 package godsalg
 
 import (
-	"io/ioutil"
 	"log"
-	"math"
-	"math/rand"
-	"os"
 
+	"github.com/unixpickle/anydiff"
+	"github.com/unixpickle/anynet"
+	"github.com/unixpickle/anyvec"
 	"github.com/unixpickle/serializer"
-	"github.com/unixpickle/weakai/neuralnet"
-	"github.com/unixpickle/weightnorm"
 )
 
 const (
-	minScale        = 1
-	maxScale        = 30
-	sparseInitCount = 30
-	moveCount       = 18
+	maxScale  = 30
+	moveCount = 18
 )
 
-func CreateNetwork() neuralnet.Network {
-	data, err := ioutil.ReadFile(os.Args[1])
-	if err == nil {
+func init() {
+	s := SinLayer{}
+	t := s.SerializerType()
+	serializer.RegisterTypedDeserializer(t, func(d []byte) (SinLayer, error) {
+		return s, nil
+	})
+}
+
+func CreateNetwork(c anyvec.Creator, path string) anynet.Net {
+	var net anynet.Net
+	if err := serializer.LoadAny(path, &net); err == nil {
 		log.Println("Using existing network.")
-		net, err := serializer.DeserializeWithType(data)
-		if err != nil {
-			panic(err)
-		}
-		return net.(neuralnet.Network)
+		return net
 	}
 
-	log.Println("Creating new network.")
-
-	return neuralnet.Network{
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(6*6*8, 1000)),
-		&neuralnet.Sigmoid{},
-		varyingFreqLayer(minScale, maxScale, 1000, 1000),
-		&neuralnet.Sin{},
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(1000, 500)),
-		&neuralnet.HyperbolicTangent{},
-		weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(500, moveCount)),
-		&neuralnet.LogSoftmaxLayer{},
+	log.Println("Creating new network...")
+	return anynet.Net{
+		anynet.NewFC(c, 6*6*8, 1024),
+		periodScaler(c, 1024),
+		SinLayer{},
+		anynet.NewFC(c, 1024, 1024),
+		periodScaler(c, 1024),
+		SinLayer{},
+		anynet.NewFC(c, 1024, 1024),
+		periodScaler(c, 1024),
+		SinLayer{},
+		anynet.NewFC(c, 1024, 512),
+		anynet.Tanh,
+		anynet.NewFC(c, 512, moveCount),
+		anynet.LogSoftmax,
 	}
 }
 
-func varyingFreqLayer(minScale, maxScale float64, in, out int) neuralnet.Layer {
-	res := weightnorm.NewDenseLayer(neuralnet.NewDenseLayer(in, out))
-	mags := res.Mags[0]
-	for i := range mags.Vector {
-		scale := minScale + (maxScale-minScale)*rand.Float64()
-		mags.Vector[i] *= scale
+func periodScaler(c anyvec.Creator, inSize int) *anynet.Affine {
+	layer := &anynet.Affine{
+		Scalers: anydiff.NewVar(c.MakeVector(inSize)),
+		Biases:  anydiff.NewVar(c.MakeVector(inSize)),
 	}
+	anyvec.Rand(layer.Scalers.Vector, anyvec.Uniform, nil)
+	layer.Scalers.Vector.Scale(c.MakeNumeric(maxScale))
+	return layer
+}
 
-	// Sparse initializations will hopefully allow us to
-	// utilize periodic values better.
-	weights := res.Weights[0]
-	for row := 0; row < out; row++ {
-		rowVec := weights.Vector[row*in : (row+1)*in]
-		for i := range rowVec {
-			rowVec[i] = 0
-		}
-		for _, i := range rand.Perm(in)[:sparseInitCount] {
-			rowVec[i] = rand.NormFloat64() / math.Sqrt(sparseInitCount)
-		}
-	}
+type SinLayer struct{}
 
-	return res
+func (s SinLayer) Apply(in anydiff.Res, n int) anydiff.Res {
+	return anydiff.Sin(in)
+}
+
+func (s SinLayer) SerializerType() string {
+	return "github.com/unixpickle/godsalg.SinLayer"
+}
+
+func (s SinLayer) Serialize() ([]byte, error) {
+	return []byte{}, nil
 }
