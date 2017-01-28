@@ -2,15 +2,15 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 
-	"github.com/unixpickle/autofunc"
+	"github.com/unixpickle/anydiff"
+	"github.com/unixpickle/anynet"
+	"github.com/unixpickle/anyvec"
+	"github.com/unixpickle/anyvec/anyvec32"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/godsalg"
-	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
-	"github.com/unixpickle/weakai/neuralnet"
 )
 
 const (
@@ -21,17 +21,9 @@ func main() {
 	if len(os.Args) != 2 {
 		die("Usage: stats <network>")
 	}
-	netData, err := ioutil.ReadFile(os.Args[1])
-	if err != nil {
-		die("Failed to read network:", err)
-	}
-	obj, err := serializer.DeserializeWithType(netData)
-	if err != nil {
-		die("Failed to deserialize network:", err)
-	}
-	net, ok := obj.(neuralnet.Network)
-	if !ok {
-		die("Not a neuralnet.Network")
+	var net anynet.Net
+	if err := serializer.LoadAny(os.Args[1], &net); err != nil {
+		die("Failed to load network:", err)
 	}
 
 	histogram := make([]float64, MaxMoves)
@@ -51,7 +43,7 @@ func main() {
 	}
 }
 
-func roundOfSolves(net neuralnet.Network) []bool {
+func roundOfSolves(net anynet.Net) []bool {
 	cubes := make([]*gocube.CubieCube, MaxMoves)
 	for i := range cubes {
 		scramble, _ := godsalg.RandomScramble(i + 1)
@@ -59,16 +51,18 @@ func roundOfSolves(net neuralnet.Network) []bool {
 	}
 	res := make([]bool, MaxMoves)
 	for i := 0; i < 21; i++ {
-		var in linalg.Vector
+		var in []float64
 		for j, c := range cubes {
 			res[j] = res[j] || c.Solved()
 			in = append(in, godsalg.CubeVector(c)...)
 		}
-		inRes := &autofunc.Variable{Vector: in}
-		out := net.BatchLearner().Batch(inRes, MaxMoves)
-		for j, moveVec := range autofunc.Split(MaxMoves, out) {
-			_, move := moveVec.Output().Max()
-			cubes[j].Move(gocube.Move(move))
+		c := anyvec32.CurrentCreator()
+		inRes := anydiff.NewConst(c.MakeVectorData(c.MakeNumericList(in)))
+		out := net.Apply(inRes, MaxMoves)
+		for j := 0; j < MaxMoves; j++ {
+			subVec := out.Output().Slice(MaxMoves*j, MaxMoves*(j+1))
+			max := anyvec.MaxIndex(subVec)
+			cubes[j].Move(gocube.Move(max))
 		}
 	}
 	return res
