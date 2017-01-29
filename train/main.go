@@ -13,14 +13,15 @@ import (
 	"github.com/unixpickle/anynet/anysgd"
 	"github.com/unixpickle/anyvec"
 	"github.com/unixpickle/anyvec/anyvec32"
+	"github.com/unixpickle/anyvec/cuda"
 	"github.com/unixpickle/godsalg"
 	"github.com/unixpickle/rip"
 	"github.com/unixpickle/serializer"
 )
 
 const (
-	BatchSize = 100
-	StepSize  = 1e-4
+	BatchSize = 10000
+	StepSize  = 1e-5
 
 	MinMoves  = 1
 	MaxMoves  = 16
@@ -28,6 +29,11 @@ const (
 )
 
 func main() {
+	handle, err := cuda.NewHandle()
+	if err != nil {
+		panic(err)
+	}
+	anyvec32.Use(cuda.NewCreator32(handle))
 	rand.Seed(time.Now().UnixNano())
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: godsalg <output>")
