@@ -2,38 +2,41 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
-	"math"
 	"math/rand"
 	"os"
 
-	"github.com/unixpickle/autofunc"
+	"github.com/unixpickle/anydiff"
+	"github.com/unixpickle/anynet"
+	"github.com/unixpickle/anyvec"
+	"github.com/unixpickle/anyvec/anyvec32"
+	"github.com/unixpickle/anyvec/cuda"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/godsalg"
-	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
-	"github.com/unixpickle/weakai/neuralnet"
 	_ "github.com/unixpickle/weightnorm"
 )
 
-const BatchSize = 30
+const (
+	BatchSize = 1000
+	MoveCount = 18
+)
 
 func main() {
+	handle, err := cuda.NewHandle()
+	if err != nil {
+		panic(err)
+	}
+	anyvec32.Use(cuda.NewCreator32(handle))
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: solve <network>")
 		os.Exit(1)
 	}
-	data, err := ioutil.ReadFile(os.Args[1])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to read:", err)
+	var net anynet.Net
+	if err := serializer.LoadAny(os.Args[1], &net); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to load:", err)
 		os.Exit(1)
 	}
-	obj, err := serializer.DeserializeWithType(data)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to deserialize:", err)
-		os.Exit(1)
-	}
-	net := obj.(neuralnet.Network)
+
 	cube, err := gocube.InputStickerCube()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Bad input:", err)
@@ -44,6 +47,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Bad state:", err)
 		os.Exit(1)
 	}
+
 	for i := 0; true; i++ {
 		solution := sampleSolution(*state, net)
 		if solution != nil {
@@ -55,7 +59,7 @@ func main() {
 	}
 }
 
-func sampleSolution(start gocube.CubieCube, net neuralnet.Network) []gocube.Move {
+func sampleSolution(start gocube.CubieCube, net anynet.Net) []gocube.Move {
 	solutions := make([][]gocube.Move, BatchSize)
 	states := make([]*gocube.CubieCube, BatchSize)
 	for i := range states {
@@ -63,17 +67,22 @@ func sampleSolution(start gocube.CubieCube, net neuralnet.Network) []gocube.Move
 		states[i] = &c
 	}
 	for i := 0; i < 21; i++ {
-		var inVec linalg.Vector
+		var inVec []float64
 		for j, x := range states {
 			if x.Solved() {
 				return solutions[j]
 			}
 			inVec = append(inVec, godsalg.CubeVector(x)...)
 		}
-		output := net.BatchLearner().Batch(&autofunc.Variable{Vector: inVec}, BatchSize)
-		parts := autofunc.Split(BatchSize, output)
-		for j, part := range parts {
-			move := selectMoveVector(part.Output())
+		inRes := anydiff.NewConst(
+			anyvec32.MakeVectorData(anyvec32.MakeNumericList(inVec).([]float32)),
+		)
+		output := net.Apply(inRes, BatchSize).Output()
+		anyvec.Exp(output)
+		slice := output.Data().([]float32)
+		for j := 0; j < BatchSize; j++ {
+			part := slice[j*MoveCount : (j+1)*MoveCount]
+			move := selectMoveVector(part)
 			solutions[j] = append(solutions[j], move)
 			states[j].Move(move)
 		}
@@ -81,10 +90,10 @@ func sampleSolution(start gocube.CubieCube, net neuralnet.Network) []gocube.Move
 	return nil
 }
 
-func selectMoveVector(vec linalg.Vector) gocube.Move {
-	p := rand.Float64()
+func selectMoveVector(vec []float32) gocube.Move {
+	p := rand.Float32()
 	for i, x := range vec {
-		p -= math.Exp(x)
+		p -= x
 		if p < 0 {
 			return gocube.Move(i)
 		}
