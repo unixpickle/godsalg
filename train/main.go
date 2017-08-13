@@ -11,9 +11,9 @@ import (
 	"github.com/unixpickle/anynet"
 	"github.com/unixpickle/anynet/anyff"
 	"github.com/unixpickle/anynet/anysgd"
+	_ "github.com/unixpickle/anyplugin"
 	"github.com/unixpickle/anyvec"
 	"github.com/unixpickle/anyvec/anyvec32"
-	"github.com/unixpickle/anyvec/cuda"
 	"github.com/unixpickle/godsalg"
 	"github.com/unixpickle/rip"
 	"github.com/unixpickle/serializer"
@@ -29,11 +29,6 @@ const (
 )
 
 func main() {
-	handle, err := cuda.NewHandle()
-	if err != nil {
-		panic(err)
-	}
-	anyvec32.Use(cuda.NewCreator32(handle))
 	rand.Seed(time.Now().UnixNano())
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: godsalg <output>")
@@ -56,7 +51,7 @@ func main() {
 		Fetcher:     &Fetcher{Creator: c},
 		Gradienter:  t,
 		Transformer: &anysgd.Adam{},
-		Samples:     DummySampleList(BatchSize),
+		Samples:     anysgd.LengthSampleList(BatchSize),
 		Rater:       anysgd.ConstRater(StepSize),
 		StatusFunc: func(b anysgd.Batch) {
 			log.Printf("iter %d: cost=%v", iterNum, t.LastCost)
@@ -75,19 +70,6 @@ func main() {
 	}
 }
 
-type DummySampleList int
-
-func (d DummySampleList) Len() int {
-	return int(d)
-}
-
-func (d DummySampleList) Swap(i, j int) {
-}
-
-func (d DummySampleList) Slice(i, j int) anysgd.SampleList {
-	return DummySampleList(j - i)
-}
-
 type Fetcher struct {
 	Creator anyvec.Creator
 }
@@ -95,7 +77,7 @@ type Fetcher struct {
 func (f *Fetcher) Fetch(s anysgd.SampleList) (anysgd.Batch, error) {
 	var inVec []float64
 	var outVec []float64
-	for i := 0; i < int(s.(DummySampleList)); i++ {
+	for i := 0; i < s.Len(); i++ {
 		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
 		cube, first := godsalg.RandomScramble(moves)
 		inVec = append(inVec, godsalg.CubeVector(cube)...)
@@ -112,6 +94,6 @@ func (f *Fetcher) Fetch(s anysgd.SampleList) (anysgd.Batch, error) {
 		Outputs: anydiff.NewConst(
 			f.Creator.MakeVectorData(f.Creator.MakeNumericList(outVec)),
 		),
-		Num: int(s.(DummySampleList)),
+		Num: s.Len(),
 	}, nil
 }

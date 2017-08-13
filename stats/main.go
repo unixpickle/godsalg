@@ -6,6 +6,7 @@ import (
 
 	"github.com/unixpickle/anydiff"
 	"github.com/unixpickle/anynet"
+	_ "github.com/unixpickle/anyplugin"
 	"github.com/unixpickle/anyvec"
 	"github.com/unixpickle/anyvec/anyvec32"
 	"github.com/unixpickle/gocube"

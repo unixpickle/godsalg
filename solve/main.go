@@ -7,9 +7,9 @@ import (
 
 	"github.com/unixpickle/anydiff"
 	"github.com/unixpickle/anynet"
+	_ "github.com/unixpickle/anyplugin"
 	"github.com/unixpickle/anyvec"
 	"github.com/unixpickle/anyvec/anyvec32"
-	"github.com/unixpickle/anyvec/cuda"
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/godsalg"
 	"github.com/unixpickle/serializer"
@@ -22,11 +22,6 @@ const (
 )
 
 func main() {
-	handle, err := cuda.NewHandle()
-	if err != nil {
-		panic(err)
-	}
-	anyvec32.Use(cuda.NewCreator32(handle))
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: solve <network>")
 		os.Exit(1)

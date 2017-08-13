@@ -1,6 +1,7 @@
 package godsalg
 
 import (
+	"math"
 	"math/rand"
 
 	"github.com/unixpickle/gocube"
@@ -8,6 +9,8 @@ import (
 
 // RandomScramble generates a move-based scramble
 // of a certain length.
+// It returns the inverse of the last move, which doubles
+// as the first move of a valid solution.
 func RandomScramble(length int) (*gocube.CubieCube, gocube.Move) {
 	moves := allMoves()
 	res := gocube.SolvedCubieCube()
@@ -38,6 +41,9 @@ func CubeVector(c *gocube.CubieCube) []float64 {
 	stickerCube := c.StickerCube()
 	res := make([]float64, 8*6*6)
 
+	mean := 1.0 / 6
+	stddev := math.Sqrt(0.13937)
+
 	var stickerIdx int
 	for i, sticker := range stickerCube[:] {
 		if i%9 == 4 {
@@ -45,9 +51,9 @@ func CubeVector(c *gocube.CubieCube) []float64 {
 		}
 		for j := 0; j < 6; j++ {
 			if j == sticker-1 {
-				res[j+stickerIdx] = 1.0
+				res[j+stickerIdx] = (1 - mean) / stddev
 			} else {
-				res[j+stickerIdx] = -0.2
+				res[j+stickerIdx] = (0 - mean) / stddev
 			}
 		}
 		stickerIdx += 6
