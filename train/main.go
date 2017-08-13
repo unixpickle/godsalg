@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
@@ -20,23 +21,27 @@ import (
 )
 
 const (
-	BatchSize = 10000
-	StepSize  = 1e-5
-
-	MinMoves  = 1
-	MaxMoves  = 16
 	MoveCount = 18
 )
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "Usage: godsalg <output>")
-		os.Exit(1)
-	}
+
+	var outFile string
+	var batchSize int
+	var stepSize float64
+	var minMoves int
+	var maxMoves int
+
+	flag.StringVar(&outFile, "out", "out_net", "output network file")
+	flag.IntVar(&batchSize, "batch", 1000, "SGD batch size")
+	flag.Float64Var(&stepSize, "step", 1e-4, "SGD step size")
+	flag.IntVar(&minMoves, "minmoves", 1, "minimum scramble moves")
+	flag.IntVar(&maxMoves, "maxmoves", 16, "maximum scramble moves")
+	flag.Parse()
 
 	c := anyvec32.CurrentCreator()
-	net := godsalg.CreateNetwork(c, os.Args[1])
+	net := godsalg.CreateNetwork(c, outFile)
 
 	log.Println("Training...")
 	t := &anyff.Trainer{
@@ -48,37 +53,42 @@ func main() {
 
 	var iterNum int
 	s := &anysgd.SGD{
-		Fetcher:     &Fetcher{Creator: c},
+		Fetcher: &Fetcher{
+			Creator:  c,
+			MinMoves: minMoves,
+			MaxMoves: maxMoves,
+		},
 		Gradienter:  t,
 		Transformer: &anysgd.Adam{},
-		Samples:     anysgd.LengthSampleList(BatchSize),
-		Rater:       anysgd.ConstRater(StepSize),
+		Samples:     anysgd.LengthSampleList(batchSize),
+		Rater:       anysgd.ConstRater(stepSize),
 		StatusFunc: func(b anysgd.Batch) {
 			log.Printf("iter %d: cost=%v", iterNum, t.LastCost)
 			iterNum++
 		},
-		BatchSize: BatchSize,
+		BatchSize: batchSize,
 	}
 
 	log.Println("Press ctrl+c once to stop...")
 	s.Run(rip.NewRIP().Chan())
 
-	file := os.Args[1]
-	if err := serializer.SaveAny(file, net); err != nil {
+	if err := serializer.SaveAny(outFile, net); err != nil {
 		fmt.Fprintln(os.Stderr, "Save error:", err)
 		os.Exit(1)
 	}
 }
 
 type Fetcher struct {
-	Creator anyvec.Creator
+	Creator  anyvec.Creator
+	MinMoves int
+	MaxMoves int
 }
 
 func (f *Fetcher) Fetch(s anysgd.SampleList) (anysgd.Batch, error) {
 	var inVec []float64
 	var outVec []float64
 	for i := 0; i < s.Len(); i++ {
-		moves := rand.Intn(MaxMoves-MinMoves+1) + MinMoves
+		moves := rand.Intn(f.MaxMoves-f.MinMoves+1) + f.MinMoves
 		cube, first := godsalg.RandomScramble(moves)
 		inVec = append(inVec, godsalg.CubeVector(cube)...)
 
