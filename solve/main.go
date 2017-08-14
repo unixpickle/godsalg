@@ -13,7 +13,6 @@ import (
 	"github.com/unixpickle/gocube"
 	"github.com/unixpickle/godsalg"
 	"github.com/unixpickle/serializer"
-	_ "github.com/unixpickle/weightnorm"
 )
 
 const (
@@ -70,7 +69,7 @@ func sampleSolution(start gocube.CubieCube, net anynet.Net) []gocube.Move {
 			inVec = append(inVec, godsalg.CubeVector(x)...)
 		}
 		inRes := anydiff.NewConst(
-			anyvec32.MakeVectorData(anyvec32.MakeNumericList(inVec).([]float32)),
+			anyvec32.MakeVectorData(anyvec32.MakeNumericList(inVec)),
 		)
 		output := net.Apply(inRes, BatchSize).Output()
 		anyvec.Exp(output)

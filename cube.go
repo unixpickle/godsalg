@@ -63,7 +63,7 @@ func CubeVector(c *gocube.CubieCube) []float64 {
 }
 
 func allMoves() []gocube.Move {
-	res := make([]gocube.Move, 18)
+	res := make([]gocube.Move, MoveCount)
 	for i := range res {
 		res[i] = gocube.Move(i)
 	}

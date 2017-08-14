@@ -61,7 +61,7 @@ func roundOfSolves(net anynet.Net) []bool {
 		inRes := anydiff.NewConst(c.MakeVectorData(c.MakeNumericList(in)))
 		out := net.Apply(inRes, MaxMoves)
 		for j := 0; j < MaxMoves; j++ {
-			subVec := out.Output().Slice(MaxMoves*j, MaxMoves*(j+1))
+			subVec := out.Output().Slice(godsalg.NumMoves*j, godsalg.NumMoves*(j+1))
 			max := anyvec.MaxIndex(subVec)
 			cubes[j].Move(gocube.Move(max))
 		}
