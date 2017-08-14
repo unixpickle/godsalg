@@ -17,7 +17,6 @@ import (
 
 const (
 	BatchSize = 1000
-	MoveCount = 18
 )
 
 func main() {
@@ -75,7 +74,7 @@ func sampleSolution(start gocube.CubieCube, net anynet.Net) []gocube.Move {
 		anyvec.Exp(output)
 		slice := output.Data().([]float32)
 		for j := 0; j < BatchSize; j++ {
-			part := slice[j*MoveCount : (j+1)*MoveCount]
+			part := slice[j*godsalg.NumMoves : (j+1)*godsalg.NumMoves]
 			move := selectMoveVector(part)
 			solutions[j] = append(solutions[j], move)
 			states[j].Move(move)
