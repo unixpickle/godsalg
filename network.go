@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	MoveCount = 18
+	NumMoves = 18
 )
 
 func CreateNetwork(c anyvec.Creator, path string) anynet.Net {
@@ -28,6 +28,6 @@ func CreateNetwork(c anyvec.Creator, path string) anynet.Net {
 	for i := 0; i < 30; i++ {
 		res = append(res, anynet.NewFC(c, 1024, 1024), &anymisc.SELU{})
 	}
-	res = append(res, anynet.NewFC(c, 1024, MoveCount), anynet.LogSoftmax)
+	res = append(res, anynet.NewFC(c, 1024, NumMoves), anynet.LogSoftmax)
 	return res
 }
